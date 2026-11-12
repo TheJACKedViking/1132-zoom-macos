@@ -1348,6 +1348,106 @@ struct ContentView: View {
     @State private var bugReportEmail = ""
     @State private var bugReportMessage = ""
 
+    /// Start Zoom (or Cancel while running) in one fixed slot, with the smaller
+    /// "Check only" dry run beside the admin-prompt note.
+    private var primaryAction: some View {
+        VStack(alignment: .leading, spacing: Design.s1 + 4) {
+            if vm.isRunning {
+                ActionCard(
+                    title: "Cancel",
+                    subtitle: "Stop the running workflow.",
+                    systemImage: "xmark.circle.fill",
+                    tint: Color.red.opacity(0.85),
+                    isPrimary: false,
+                    isDisabled: false,
+                    action: {
+                        vm.cancelWorkflow()
+                    }
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
+            } else {
+                ActionCard(
+                    title: vm.isZoomInstalled ? "Start Zoom" : "Zoom Required",
+                    subtitle: vm.isZoomInstalled
+                        ? "Checks the network, resets Zoom data, refreshes DNS, and launches Zoom in sandbox mode."
+                        : "Install Zoom or choose its location before starting.",
+                    systemImage: "video.circle.fill",
+                    tint: Design.accent,
+                    isPrimary: true,
+                    isDisabled: !vm.isZoomInstalled,
+                    action: {
+                        showStartConfirmation = true
+                    }
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: Design.s1) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Design.tertiaryText)
+                Text("macOS will ask for your administrator password during the repair.")
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundStyle(Design.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: Design.s2)
+
+                Button(action: { vm.dryRun() }) {
+                    Label("Check only", systemImage: "eye")
+                        .secondaryControl()
+                }
+                .buttonStyle(AppButtonStyle())
+                .disabled(vm.isRunning)
+                .opacity(vm.isRunning ? 0.5 : 1.0)
+                .help("Check system state without making any changes.")
+            }
+            .padding(.horizontal, Design.s1)
+        }
+    }
+
+    /// Project links and support tools, moved out of the main content area.
+    private var helpMenu: some View {
+        Menu {
+            Link(destination: repositoryURL) {
+                Label("GitHub", systemImage: "link")
+            }
+            Link(destination: websiteURL) {
+                Label("Website", systemImage: "globe")
+            }
+            Divider()
+            Button {
+                openBugReport()
+            } label: {
+                Label("Report a Bug…", systemImage: "ladybug")
+            }
+            .disabled(isReportingBug)
+            Button {
+                vm.exportDiagnostics(appVersion: appVersion)
+            } label: {
+                Label("Export Diagnostics…", systemImage: "square.and.arrow.up")
+            }
+        } label: {
+            Label("Help", systemImage: "questionmark.circle")
+        }
+        .help("Links, bug reports, and diagnostics")
+    }
+
+    private func openBugReport() {
+        if vm.isRunning {
+            showActiveReportWarning = true
+        } else {
+            reportCapturedDuringWorkflow = false
+            showBugReportForm = true
+        }
+    }
+
+    /// A repair (Start Zoom or Retry Reset) is in progress. Dry runs have no step list.
+    private var isRepairRunning: Bool {
+        vm.isRunning && vm.workflowProgress != nil
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -1361,103 +1461,52 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: Design.s3) {
-                Text("1132 Fixer")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(Design.primaryText)
-
-                HeaderCard(
-                    repositoryURL: repositoryURL,
-                    websiteURL: websiteURL,
-                    onReportBug: {
-                        if vm.isRunning {
-                            showActiveReportWarning = true
-                        } else {
-                            reportCapturedDuringWorkflow = false
-                            showBugReportForm = true
-                        }
-                    },
-                    isReportBugDisabled: isReportingBug,
-                    onExportDiagnostics: { vm.exportDiagnostics(appVersion: appVersion) }
-                )
-
-                PreflightPanel(
-                    preflight: vm.preflight,
-                    onOpenCameraSettings: { vm.openPrivacySettings(for: .video) },
-                    onOpenMicrophoneSettings: { vm.openPrivacySettings(for: .audio) }
-                )
-
-                ZoomLocationPanel(
-                    appPath: vm.zoomAppPath,
-                    isCustom: vm.customZoomAppPath != nil,
-                    isInstalled: vm.isZoomInstalled,
-                    isDisabled: vm.isRunning,
-                    onChoose: { vm.chooseZoomLocation() },
-                    onReset: { vm.resetZoomLocation() },
-                    onDownload: { vm.openZoomDownload() }
-                )
-
-                HStack(spacing: Design.s2) {
-                    ActionCard(
-                        title: vm.isZoomInstalled ? "Start Zoom" : "Zoom Required",
-                        subtitle: vm.isZoomInstalled
-                            ? "Checks the network, resets Zoom data, refreshes DNS, and launches Zoom in sandbox mode."
-                            : "Install Zoom or choose its location before starting.",
-                        systemImage: "video.circle.fill",
-                        tint: Design.accent,
-                        isPrimary: true,
-                        isDisabled: vm.isRunning || !vm.isZoomInstalled,
-                        action: {
-                            showStartConfirmation = true
-                        }
-                    )
-
-                    if vm.isRunning {
-                        ActionCard(
-                            title: "Cancel",
-                            subtitle: "Stop the running workflow.",
-                            systemImage: "xmark.circle.fill",
-                            tint: Color.red.opacity(0.85),
-                            isPrimary: false,
-                            isDisabled: false,
-                            action: {
-                                vm.cancelWorkflow()
-                            }
-                        )
-                        .transition(.opacity)
+            ScrollView {
+                VStack(spacing: Design.s2) {
+                    // While a repair runs, the live step list takes the readiness card's place.
+                    if isRepairRunning, let progress = vm.workflowProgress {
+                        StepListPanel(progress: progress, results: nil, isRunning: true)
                     } else {
-                        ActionCard(
-                            title: "Dry Run",
-                            subtitle: "Check system state without making any changes.",
-                            systemImage: "eye.circle.fill",
-                            tint: Design.neutralAccent,
-                            isPrimary: false,
+                        ReadinessPanel(
+                            preflight: vm.preflight,
+                            zoomAppPath: vm.zoomAppPath,
+                            isCustomZoomLocation: vm.customZoomAppPath != nil,
+                            isZoomInstalled: vm.isZoomInstalled,
                             isDisabled: vm.isRunning,
-                            action: {
-                                vm.dryRun()
-                            }
+                            onChooseZoom: { vm.chooseZoomLocation() },
+                            onResetZoom: { vm.resetZoomLocation() },
+                            onDownloadZoom: { vm.openZoomDownload() },
+                            onOpenCameraSettings: { vm.openPrivacySettings(for: .video) },
+                            onOpenMicrophoneSettings: { vm.openPrivacySettings(for: .audio) }
                         )
                     }
+
+                    primaryAction
+
+                    WorkflowStatusPanel(
+                        state: vm.workflowState,
+                        resetTimedOut: vm.resetTimedOut,
+                        isRunning: vm.isRunning,
+                        onRetryReset: { vm.retryResetZoomData() }
+                    )
+
+                    // After a repair finishes, keep its per-step results visible.
+                    if !vm.isRunning, let progress = vm.workflowProgress {
+                        StepListPanel(progress: progress, results: vm.lastRunResults, isRunning: false)
+                    }
+
+                    LogPanel(logs: vm.logs, onCopy: vm.copyLogs, onClear: vm.clearLogs)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-
-                if let progress = vm.workflowProgress {
-                    WorkflowProgressBar(progress: progress)
-                }
-
-                WorkflowStatusPanel(
-                    state: vm.workflowState,
-                    resetTimedOut: vm.resetTimedOut,
-                    isRunning: vm.isRunning,
-                    onRetryReset: { vm.retryResetZoomData() }
-                )
-
-                LogPanel(logs: vm.logs, onCopy: vm.copyLogs, onClear: vm.clearLogs)
+                .padding(Design.s3)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(Design.s3)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(minWidth: 720, minHeight: 640)
+        .frame(minWidth: 640, minHeight: 520)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                helpMenu
+            }
+        }
         .onAppear { vm.runPreflight() }
         .onChange(of: scenePhase) { newPhase in
             guard newPhase == .active else { return }
@@ -1619,69 +1668,6 @@ private struct BugReportFormSheet: View {
     }
 }
 
-private struct HeaderCard: View {
-    let repositoryURL: URL
-    let websiteURL: URL
-    let onReportBug: () -> Void
-    let isReportBugDisabled: Bool
-    let onExportDiagnostics: () -> Void
-
-    var body: some View {
-        HStack(spacing: Design.s1) {
-            HeaderLinkButton(title: "GitHub", systemImage: "link", destination: repositoryURL)
-            HeaderLinkButton(title: "Website", systemImage: "globe", destination: websiteURL)
-            HeaderActionButton(
-                title: "Report a bug",
-                systemImage: "ladybug",
-                isDisabled: isReportBugDisabled,
-                action: onReportBug
-            )
-            HeaderActionButton(
-                title: "Export Diagnostics",
-                systemImage: "square.and.arrow.up",
-                isDisabled: false,
-                action: onExportDiagnostics
-            )
-        }
-        .panelChrome(padding: Design.s2)
-    }
-}
-
-private struct HeaderLinkButton: View {
-    let title: String
-    let systemImage: String
-    let destination: URL
-
-    var body: some View {
-        Link(destination: destination) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
-                .secondaryControl()
-        }
-        .frame(maxWidth: .infinity)
-        .buttonStyle(AppButtonStyle())
-    }
-}
-
-private struct HeaderActionButton: View {
-    let title: String
-    let systemImage: String
-    let isDisabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
-                .secondaryControl()
-        }
-        .frame(maxWidth: .infinity)
-        .buttonStyle(AppButtonStyle())
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.5 : 1.0)
-    }
-}
-
 private struct ActionCard: View {
     let title: String
     let subtitle: String
@@ -1747,27 +1733,79 @@ private struct ActionCard: View {
     }
 }
 
-private struct WorkflowProgressBar: View {
+/// Vertical step list used both live (while a repair runs) and afterwards, where
+/// steps that did not succeed show their detail inline.
+private struct StepListPanel: View {
     let progress: AppViewModel.WorkflowProgress
+    let results: [AppViewModel.StepResult]?
+    let isRunning: Bool
+
+    private var subtitle: String {
+        if isRunning {
+            let finished = progress.steps.filter { $0.state != .pending && $0.state != .running }.count
+            return "\(finished) of \(progress.steps.count) steps finished"
+        }
+        guard let results else {
+            return "Stopped before all steps finished."
+        }
+        let warnings = results.filter { !$0.succeeded }.count
+        switch warnings {
+        case 0: return "All steps succeeded."
+        case 1: return "1 step needs review."
+        default: return "\(warnings) steps need review."
+        }
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Design.s1) {
-            ForEach(progress.steps) { step in
-                VStack(spacing: Design.s1) {
-                    stepIcon(step.state)
-                        .font(.system(size: 14))
-                        .frame(height: 16)
-                    Text(step.name)
-                        .font(.system(size: 11, weight: .regular, design: .rounded))
-                        .foregroundStyle(Design.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+        VStack(alignment: .leading, spacing: Design.s2) {
+            VStack(alignment: .leading, spacing: 4) {
+                SectionHeader(
+                    title: isRunning ? "Repair in progress" : "Last run",
+                    systemImage: isRunning ? "wrench.and.screwdriver" : "clock.arrow.circlepath"
+                )
+                Text(subtitle)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundStyle(Design.secondaryText)
+                    .padding(.leading, Design.iconColumn + Design.s1 + 2)
+            }
+
+            VStack(alignment: .leading, spacing: Design.s1 + 2) {
+                ForEach(progress.steps) { step in
+                    HStack(alignment: .top, spacing: Design.s1 + 2) {
+                        stepIcon(step.state)
+                            .font(.system(size: 13))
+                            .frame(width: Design.iconColumn, height: 16, alignment: .center)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.name)
+                                .font(.system(size: 13, weight: step.state == .running ? .semibold : .regular, design: .rounded))
+                                .foregroundStyle(step.state == .pending ? Design.tertiaryText : Design.primaryText.opacity(0.9))
+
+                            if let detail = detail(for: step) {
+                                Text(detail)
+                                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                                    .foregroundStyle(Design.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                .frame(maxWidth: .infinity)
             }
         }
-        .panelChrome(padding: Design.s2, radius: 16)
+        .panelChrome()
+    }
+
+    /// Only steps that did not fully succeed show their detail, so the list stays short.
+    private func detail(for step: AppViewModel.WorkflowProgress.Step) -> String? {
+        guard let result = results?.first(where: { $0.id == step.id }),
+              !result.succeeded,
+              let detail = result.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !detail.isEmpty else {
+            return nil
+        }
+        return detail
     }
 
     @ViewBuilder
@@ -1809,7 +1847,7 @@ private struct WorkflowStatusPanel: View {
         case .dryRunCompleted:
             return ("checkmark.circle.fill", "Dry run completed", "No repair or Zoom launch was performed.", .green)
         case .completed:
-            return ("checkmark.circle.fill", "Repair completed", "Zoom launch completed. Review any warning steps above.", .green)
+            return ("checkmark.circle.fill", "Repair completed", "Zoom launch completed. Review any steps marked below.", .green)
         case .resetCompleted:
             return ("checkmark.circle.fill", "Zoom data reset", "Reset completed. Run Start Zoom when you are ready to continue.", .green)
         case .failed(let message):
@@ -1852,202 +1890,179 @@ private struct WorkflowStatusPanel: View {
     }
 }
 
-private struct PreflightPanel: View {
+/// Readiness summary: one status headline, the checks that matter (Zoom, network,
+/// camera, microphone) with their fix actions inline, and a compact system line.
+private struct ReadinessPanel: View {
     let preflight: AppViewModel.PreflightInfo
+    let zoomAppPath: String
+    let isCustomZoomLocation: Bool
+    let isZoomInstalled: Bool
+    let isDisabled: Bool
+    let onChooseZoom: () -> Void
+    let onResetZoom: () -> Void
+    let onDownloadZoom: () -> Void
     let onOpenCameraSettings: () -> Void
     let onOpenMicrophoneSettings: () -> Void
 
-    @State private var isExpanded = false
+    private struct RowAction: Identifiable {
+        let title: String
+        let action: () -> Void
+        var id: String { title }
+    }
 
-    private static let supportMatrix: [(label: String, supported: Bool)] = [
-        ("Intel", true),
-        ("Apple Silicon", true),
-        ("macOS 13", true),
-        ("macOS 14+", true),
-        ("Wi-Fi", true),
-        ("Ethernet", true),
-        ("VPN", false),
-    ]
+    private struct Row: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+        let isWarning: Bool
+        var actions: [RowAction] = []
+    }
+
+    private func check(_ id: String) -> AppViewModel.PreflightInfo.Check? {
+        preflight.checks.first { $0.id == id }
+    }
+
+    private var rows: [Row] {
+        var rows: [Row] = []
+
+        var zoomActions: [RowAction] = []
+        if !isZoomInstalled {
+            zoomActions.append(RowAction(title: "Download", action: onDownloadZoom))
+        }
+        if isCustomZoomLocation {
+            zoomActions.append(RowAction(title: "Use Default", action: onResetZoom))
+        }
+        zoomActions.append(RowAction(title: "Change…", action: onChooseZoom))
+        rows.append(Row(
+            id: "zoom",
+            label: "Zoom",
+            value: isZoomInstalled
+                ? zoomAppPath + (isCustomZoomLocation ? " (custom)" : "")
+                : "Not found at \(zoomAppPath)",
+            isWarning: !isZoomInstalled,
+            actions: zoomActions
+        ))
+
+        guard preflight.status == .ready else { return rows }
+
+        if let vpn = check("vpn"), vpn.isWarning {
+            rows.append(Row(id: "network", label: "Network", value: "VPN active — turn it off before starting", isWarning: true))
+        } else if let iface = check("iface") {
+            let vpnNote = check("vpn") != nil ? " · no VPN" : ""
+            rows.append(Row(id: "network", label: "Network", value: iface.value + vpnNote, isWarning: iface.isWarning))
+        }
+
+        if let camera = check("camera") {
+            rows.append(Row(
+                id: "camera",
+                label: "Camera",
+                value: camera.value,
+                isWarning: camera.isWarning,
+                actions: camera.isWarning ? [RowAction(title: "Open Settings", action: onOpenCameraSettings)] : []
+            ))
+        }
+
+        if let microphone = check("microphone") {
+            rows.append(Row(
+                id: "microphone",
+                label: "Microphone",
+                value: microphone.value,
+                isWarning: microphone.isWarning,
+                actions: microphone.isWarning ? [RowAction(title: "Open Settings", action: onOpenMicrophoneSettings)] : []
+            ))
+        }
+
+        return rows
+    }
+
+    /// Informational checks shown on one compact line instead of their own rows.
+    private var systemChecks: [AppViewModel.PreflightInfo.Check] {
+        ["os", "arch", "macspoof"].compactMap { check($0) }
+    }
+
+    private var attentionCount: Int {
+        rows.filter(\.isWarning).count + systemChecks.filter(\.isWarning).count
+    }
+
+    private var headline: String {
+        switch attentionCount {
+        case 0: return "Ready to start"
+        case 1: return "1 item needs attention"
+        default: return "\(attentionCount) items need attention"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.s2) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: Design.s1) {
-                    SectionHeader(title: "Preflight Checks", systemImage: "checklist")
-                    Spacer(minLength: Design.s2)
-                    Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                        .frame(width: 14)
-                        .secondaryControl()
-                }
+            header
+
+            if case .error(let message) = preflight.status {
+                Text(message)
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.red.opacity(0.9))
             }
-            .buttonStyle(AppButtonStyle())
-            .help(isExpanded ? "Collapse preflight checks" : "Expand preflight checks")
 
-            if isExpanded {
-                Group {
-                    switch preflight.status {
-                    case .loading:
-                        HStack(spacing: Design.s1) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Checking system...")
-                                .font(.system(size: 13, weight: .regular, design: .rounded))
-                                .foregroundStyle(Design.secondaryText)
-                        }
-                    case .error(let msg):
-                        Text(msg)
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
-                            .foregroundStyle(.red.opacity(0.9))
-                    case .ready:
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(), spacing: Design.s3, alignment: .leading),
-                                GridItem(.flexible(), spacing: Design.s3, alignment: .leading)
-                            ],
-                            alignment: .leading,
-                            spacing: Design.s2
-                        ) {
-                            ForEach(preflight.checks) { check in
-                                HStack(alignment: .firstTextBaseline, spacing: Design.s1 + 2) {
-                                    Image(systemName: check.isWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(check.isWarning ? .yellow : .green)
-                                        .frame(width: Design.iconColumn, alignment: .center)
-                                    Text(check.label + ":")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Design.secondaryText)
-                                    Text(check.value)
-                                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                                        .foregroundStyle(Design.primaryText.opacity(0.9))
-                                        .fixedSize(horizontal: false, vertical: true)
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Design.s2, verticalSpacing: Design.s1 + 4) {
+                ForEach(rows) { row in
+                    GridRow {
+                        Image(systemName: row.isWarning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(row.isWarning ? .yellow : .green)
+                            .frame(width: Design.iconColumn, alignment: .center)
 
-                                    if check.id == "camera" && check.isWarning {
-                                        Button("Open Settings", action: onOpenCameraSettings)
-                                            .buttonStyle(.link)
-                                    } else if check.id == "microphone" && check.isWarning {
-                                        Button("Open Settings", action: onOpenMicrophoneSettings)
-                                            .buttonStyle(.link)
-                                    }
-                                }
+                        Text(row.label)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(Design.secondaryText)
+
+                        Text(row.value)
+                            .font(.system(size: 13, weight: .regular, design: .rounded))
+                            .foregroundStyle(Design.primaryText.opacity(0.9))
+                            .lineLimit(row.id == "zoom" ? 1 : 2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack(spacing: Design.s2) {
+                            ForEach(row.actions) { item in
+                                Button(item.title, action: item.action)
+                                    .buttonStyle(.link)
+                                    .disabled(isDisabled)
                             }
                         }
                     }
-
-                    Divider()
-                        .overlay(Color.white.opacity(0.08))
-                        .padding(.vertical, Design.s1)
-
-                    HStack(spacing: Design.s1) {
-                        Text("Supported:")
-                            .font(.system(size: 11, weight: .regular, design: .rounded))
-                            .foregroundStyle(Design.tertiaryText)
-                        ForEach(Self.supportMatrix, id: \.label) { item in
-                            SupportBadge(label: item.label, supported: item.supported)
-                        }
-                    }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if !systemChecks.isEmpty {
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+
+                Text(systemChecks.map(\.value).joined(separator: " · "))
+                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                    .foregroundStyle(systemChecks.contains(where: \.isWarning) ? Color.yellow : Design.tertiaryText)
             }
         }
         .panelChrome()
     }
-}
 
-/// Informational pill in the support matrix — soft fill, no hard outline.
-private struct SupportBadge: View {
-    let label: String
-    let supported: Bool
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 11, weight: .medium, design: .rounded))
-            .foregroundStyle(supported ? Color.green.opacity(0.85) : Color.red.opacity(0.75))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(supported ? Color.green.opacity(0.12) : Color.red.opacity(0.12))
-            )
-    }
-}
-
-private struct ZoomLocationPanel: View {
-    let appPath: String
-    let isCustom: Bool
-    let isInstalled: Bool
-    let isDisabled: Bool
-    let onChoose: () -> Void
-    let onReset: () -> Void
-    let onDownload: () -> Void
-
-    var body: some View {
-        HStack(alignment: .center, spacing: Design.s3) {
-            VStack(alignment: .leading, spacing: Design.s1 + 4) {
-                HStack(spacing: Design.s1) {
-                    SectionHeader(title: "Zoom Location", systemImage: "folder")
-                    if isCustom {
-                        Text("Custom")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Design.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(Design.accent.opacity(0.16))
-                            )
-                    }
-                }
-
-                Text(appPath)
-                    .font(.system(size: 13, weight: .regular, design: .default))
-                    .foregroundStyle(Design.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-
-                if !isInstalled {
-                    Text("Zoom was not found at this location.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.yellow)
+    private var header: some View {
+        HStack(spacing: Design.s1 + 2) {
+            Group {
+                if preflight.status == .loading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: attentionCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(attentionCount == 0 ? Color.green : Color.yellow)
                 }
             }
+            .frame(width: Design.iconColumn, alignment: .center)
 
-            Spacer(minLength: Design.s2)
-
-            HStack(spacing: Design.s1) {
-                if !isInstalled {
-                    Button(action: onDownload) {
-                        Label("Download Zoom", systemImage: "arrow.down.circle")
-                            .secondaryControl()
-                    }
-                    .buttonStyle(AppButtonStyle())
-                    .disabled(isDisabled)
-                }
-
-                if isCustom {
-                    Button(action: onReset) {
-                        Text("Use Default")
-                            .secondaryControl()
-                    }
-                    .buttonStyle(AppButtonStyle())
-                    .disabled(isDisabled)
-                    .opacity(isDisabled ? 0.5 : 1.0)
-                }
-
-                Button(action: onChoose) {
-                    Label("Choose Location…", systemImage: "folder")
-                        .secondaryControl(isProminent: true)
-                }
-                .buttonStyle(AppButtonStyle())
-                .disabled(isDisabled)
-                .opacity(isDisabled ? 0.5 : 1.0)
-            }
-            .fixedSize()
+            Text(preflight.status == .loading ? "Checking your Mac…" : headline)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(Design.primaryText)
         }
-        .panelChrome()
     }
 }
 
@@ -2115,10 +2130,9 @@ private struct LogPanel: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .frame(maxHeight: .infinity)
+                .frame(height: 220)
             }
         }
         .panelChrome()
-        .frame(maxHeight: isExpanded ? .infinity : nil, alignment: .topLeading)
     }
 }
